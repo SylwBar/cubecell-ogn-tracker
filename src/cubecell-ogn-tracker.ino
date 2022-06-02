@@ -23,6 +23,8 @@
 #include "freqplan.h"
 #include "rfm.h"
 
+#include "radio_ext.h"
+
 static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
@@ -485,13 +487,13 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   LED_OFF(); }
 
 static void OGN_TxConfig(void)
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC); }
+{ RadioSetTxConfigExt(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC); }
 
 // static void PAW_TxConfig(void)      // incorrect because the PAW preamble needs to be long and the library does not support it
 // { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 1, 1, 0, 0, 0, 0, 20, 8, PAW_SYNC); }
 
 static void OGN_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC); }
+{ RadioSetRxConfigExt(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC); }
 
 static int OGN_Transmit(const uint8_t *Data, uint8_t Len=26)      // send packet, but first manchester encode it
 { uint8_t Packet[2*Len];

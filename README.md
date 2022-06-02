@@ -26,14 +26,6 @@ git clone https://github.com/pjalocha/cubecell-ogn-tracker.git
 cd cubecell-ogn-tracker
 ```
 
-Clone the HELTEC library hacked for additional RF options
-```
-mkdir lib
-cd lib
-git clone https://github.com/pjalocha/CubeCell-Arduino.git
-cd ..
-```
-
 Compile and upload
 ```
 ~/.platformio/penv/bin/pio run --target upload
