@@ -24,8 +24,6 @@
 #include "freqplan.h"
 #include "rfm.h"
 
-#include "radio_ext.h"
-
 static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
@@ -492,14 +490,25 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   // RxPktData->Print(CONS_UART_Write, 1);
   LED_OFF(); }
 
+extern SX126x_t SX126x; /* access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c */
+
+static void OGN_UpdateConfig(void)
+{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
+  SX126x.PacketParams.Params.Gfsk.SyncWordLength = 8 << 3;
+  SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
+  SX126xSetPacketParams(&SX126x.PacketParams);
+  SX126xSetSyncWord((uint8_t*)OGN1_SYNC); }
+
 static void OGN_TxConfig(void)
-{ RadioSetTxConfigExt(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC); }
+{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
+  OGN_UpdateConfig(); }
 
 // static void PAW_TxConfig(void)      // incorrect because the PAW preamble needs to be long and the library does not support it
 // { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 1, 1, 0, 0, 0, 0, 20, 8, PAW_SYNC); }
 
 static void OGN_RxConfig(void)
-{ RadioSetRxConfigExt(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC); }
+{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true);
+  OGN_UpdateConfig(); }
 
 static int OGN_Transmit(const uint8_t *Data, uint8_t Len=26)      // send packet, but first manchester encode it
 { uint8_t Packet[2*Len];
