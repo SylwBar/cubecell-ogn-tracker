@@ -5,6 +5,7 @@
 #include <Wire.h>
 
 #include "LoRaWan_APP.h"
+#include "sx126x.h"
 
 #include "GPS_Air530.h"
 #include "GPS_Air530Z.h"
@@ -450,6 +451,11 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
 { if(Size!=2*26) return;
   RX_OGN_Packets++;
   LED_Green();
+  /* --- Workaround for issue: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236 --- */
+  PacketStatus_t RadioPktStatus;
+  SX126xGetPacketStatus(&RadioPktStatus);
+  RSSI = RadioPktStatus.Params.Gfsk.RssiAvg;
+  /* --- Workaround end --- */
   uint8_t PktIdx=0;
   for(uint8_t Idx=0; Idx<26; Idx++)                                     // loop over packet bytes
   { uint8_t ByteH = Packet[PktIdx++];
