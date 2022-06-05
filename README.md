@@ -7,10 +7,7 @@ Serial console prints GPS NMEA and setting parameters is possible via $POGNS sen
 however there is an issue with characters being lost thus this needs to be addressed.
 
 ## Compile/upload
-This project is compiled with PlatformIO and requires a forked HELTEC library
-modified to enable OGN transmission and reception https://github.com/pjalocha/CubeCell-Arduino
-This library should be placed under <i>lib</i> sub-folder of the project.
-
+This project is compiled with PlatformIO.
 I include the commands which worked for me on Linux, it might be a little different on Windows
 
 Install PlatformIO
