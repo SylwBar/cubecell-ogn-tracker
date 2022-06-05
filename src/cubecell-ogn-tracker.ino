@@ -2,6 +2,9 @@
 // Note: requires modifications to the core RF libraries which support OGN transmission and reception
 
 #include "Arduino.h"
+#include <FreeRTOS.h>
+#include <FreeRTOSSetup.h>
+#include <task.h>
 #include <Wire.h>
 
 #include "LoRaWan_APP.h"
@@ -601,6 +604,19 @@ static void Button_Process(void)
 
 // ===============================================================================================
 
+#define STACK_SIZE 100
+TaskHandle_t xHandle;
+static void thread( void *pvParameters )
+{
+  while(1)
+  {
+    LED_Red();
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    LED_OFF();
+    vTaskDelay(4900 / portTICK_PERIOD_MS);
+  }
+}
+
 void setup()
 { // delay(2000); // prevents USB driver crash on startup, do not omit this
 
@@ -640,7 +656,11 @@ void setup()
   OGN_RxConfig();
   Radio.Rx(0);
 
-  RX_RSSI.Set(-2*110); }
+  RX_RSSI.Set(-2*110); 
+  FreeRTOSSetup();
+  xTaskCreate(thread, "Task", STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &xHandle);
+  vTaskStartScheduler(); }
+
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
 
