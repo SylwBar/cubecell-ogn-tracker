@@ -604,8 +604,8 @@ static void Button_Process(void)
 
 // ===============================================================================================
 
-#define STACK_SIZE 100
-TaskHandle_t xHandle;
+#define THREAD_STACK_SIZE 64
+
 static void thread( void *pvParameters )
 {
   while(1)
@@ -656,10 +656,16 @@ void setup()
   OGN_RxConfig();
   Radio.Rx(0);
 
-  RX_RSSI.Set(-2*110); 
+  RX_RSSI.Set(-2*110);
+
+/* Free RTOS part */
+  StackType_t xStack[THREAD_STACK_SIZE];
+  StaticTask_t xTaskBuffer;
+
   FreeRTOSSetup();
-  xTaskCreate(thread, "Task", STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &xHandle);
-  vTaskStartScheduler(); }
+  xTaskCreateStatic(thread, "Task", THREAD_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, xStack, &xTaskBuffer);
+  vTaskStartScheduler();
+/* Should never reach this place */ }
 
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
@@ -772,5 +778,4 @@ void loop()
     { // printf("TX   #1: %d\n", SysTime);
       OGN_Transmit(*TxPkt1); TxPkt1=0; }
   }
-
 }

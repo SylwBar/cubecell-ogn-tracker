@@ -36,7 +36,7 @@ static StackType_t uxIdleTaskStack[ configIDLE_TASK_STACK_SIZE ];
 
     /* Pass out the size of the array pointed to by *ppxIdleTaskStackBuffer.
     Note that, as the array is necessarily of type StackType_t,
-    configMINIMAL_STACK_SIZE is specified in words, not bytes. */
+    configIDLE_TASK_STACK_SIZE is specified in words, not bytes. */
     *pulIdleTaskStackSize = configIDLE_TASK_STACK_SIZE;
 }
 /*-----------------------------------------------------------*/

@@ -49,7 +49,8 @@
 #define configCPU_CLOCK_HZ				( ( unsigned long ) F_CPU  )
 #define configTICK_RATE_HZ				( ( TickType_t ) 1000 )
 #define configMAX_PRIORITIES			( 5 )
-#define configMINIMAL_STACK_SIZE		( ( unsigned short ) 512 ) /* Stack for Arduino loop */
+#define configMINIMAL_STACK_SIZE		( ( unsigned short ) 150 )
+#define configIDLE_TASK_STACK_SIZE	( ( unsigned short ) 512 ) /* Stack for Arduino loop */
 #define configMAX_TASK_NAME_LEN			( 8 )
 #define configUSE_TRACE_FACILITY		1
 #define configUSE_16_BIT_TICKS			0
@@ -62,8 +63,8 @@
 #define configUSE_APPLICATION_TASK_TAG	0
 #define configUSE_COUNTING_SEMAPHORES	1
 #define configUSE_QUEUE_SETS			1
-#define configSUPPORT_STATIC_ALLOCATION 0
-#define configSUPPORT_DYNAMIC_ALLOCATION 1
+#define configSUPPORT_STATIC_ALLOCATION 1
+#define configSUPPORT_DYNAMIC_ALLOCATION 0
 
 /* Run time stats related definitions. */
 #define configGENERATE_RUN_TIME_STATS	0
