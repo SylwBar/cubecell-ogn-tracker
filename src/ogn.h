@@ -26,6 +26,7 @@
 
 #include "ogn1.h"    // OGN v1
 #include "ogn2.h"    // OGN v2
+#include "adsl.h"    // ADS-L
 #include "fanet.h"
 #include "gdl90.h"
 
@@ -52,10 +53,10 @@ template <class OGNx_Packet, class OGNy_Packet>
   if(abs(DistDeltaH)>=200) return 1;                                          // if extrapolation error more than 50m
   int16_t Turn = Packet->DecodeTurnRate();                                    // [0.1deg/s]
   int16_t CFaccel = ((int32_t)Turn*Speed*229+0x10000)>>17;                    // [0.1m/s^2] centrifugal acceleration in turn
-  if(abs(CFaccel)>=50) return 1;                                              // CFaccel at or above 5m/s^2 (0.5g)
+  if(abs(CFaccel)>=25) return 1;                                              // CFaccel at or above 5m/s^2 (0.5g)
   int16_t PrevTurn = PrevPacket->DecodeTurnRate();                            // [0.1deg/s]
   int16_t PrevCFaccel = ((int32_t)PrevTurn*PrevSpeed*229+0x10000)>>17;        // [0.1m/s^2]
-  int32_t DistDeltaR = abs(CFaccel-PrevCFaccel)*TimeDelta*TimeDelta/2;        // [0.1m]
+  int32_t DistDeltaR = abs(CFaccel-PrevCFaccel)*(int32_t)TimeDelta*TimeDelta/2; // [0.1m]
   if(abs(DistDeltaR)>=200) return 1;                                          // [0.1m]
   return 0; }
 
@@ -68,7 +69,7 @@ template <class OGNx_Packet=OGN1_Packet>
    static const int     Words =  7;
    static const int     Bytes = 26;
 
-   OGNx_Packet Packet;     // OGN packet
+   OGNx_Packet Packet;    // OGN packet
 
    uint32_t FEC[2];       // Gallager code: 48 check bits for 160 user bits
 
@@ -180,19 +181,25 @@ template <class OGNx_Packet=OGN1_Packet>
    uint32_t FEC[2];       // Gallager code: 48 check bits for 160 user bits
 
    union
-   { uint8_t State;       //
+   { uint8_t State;       // state bits and small values
      struct
-     { bool Saved   :1;   // has been already saved in internal storage
-       bool Ready   :1;   // is ready for transmission
-       bool Sent    :1;   // has already been transmitted out
+     { // bool Saved   :1;   // has been already saved in internal storage
+       // bool Ready   :1;   // is ready for transmission
+       // bool Sent    :1;   // has already been transmitted out
+       bool Alloc   :1;   // allocated in a queue or list
        bool Correct :1;   // correctly received or corrected by FEC
        uint8_t RxErr:4;   // number of bit errors corrected upon reception
+       uint8_t Warn :2;   // LookOut warning level
      } ;
    } ;
 
    uint8_t RxChan;        // RF channel where the packet was received
    uint8_t RxRSSI;        // [-0.5dBm]
    uint8_t Rank;          // rank: low altitude and weak signal => high rank
+
+   int16_t LatDist;       // [m] distance along the latitude
+   int16_t LonDist;       // [m] distance along the longitude
+   // int16_t AltDist;       // [m]
 
   public:
 
@@ -238,8 +245,8 @@ template <class OGNx_Packet=OGN1_Packet>
      if(RxRSSI>128)                                                     // [-0.5dB] weaker signal => higher rank
        Rank += (RxRSSI-128)>>2;                                         // 1point/2dB less signal
      if(Packet.Header.Encrypted)  return;                               // for exncrypted packets we only take signal strength
-     RxAltitude -= Packet.DecodeAltitude();                             // [m] lower altitude => higher rank
-     if(RxAltitude>0)
+     RxAltitude -= Packet.DecodeAltitude();                             // [m] receiver altitude - target altitude
+     if(RxAltitude>0)                                                   // 
        Rank += RxAltitude>>6;                                           // 1points/64m of altitude below
      int16_t ClimbRate = Packet.DecodeClimbRate();                      // [0.1m/s] higher sink rate => higher rank
      if(ClimbRate<0)
@@ -585,19 +592,20 @@ template<class OGNx_Packet, uint8_t Size=8>
    uint8_t getNew(void)                                                       // get (index of) a free or lowest rank packet
    { Sum-=Packet[LowIdx].Rank; Packet[LowIdx].Rank=0; Low=0; return LowIdx; } // remove old packet from the rank sum
 
-   uint8_t size(void)
+   uint8_t size(void)                                                        // count all slots with Alloc flag set
    { uint8_t Count=0;
      for(uint8_t Idx=0; Idx<Size; Idx++)
-     { if(Packet[Idx].Rank) Count++; }
+     { if(Packet[Idx].Alloc) Count++; }
      return Count; }
 
-   OGN_RxPacket<OGNx_Packet> *addNew(uint8_t NewIdx)                         // add the new packet to the queue
+   OGN_RxPacket<OGNx_Packet> *addNew(uint8_t NewIdx)                          // add the new packet to the queue
    { OGN_RxPacket<OGNx_Packet> *Prev = 0;
+     Packet[NewIdx].Alloc=1;                                                  // mark this clot as allocated
      uint32_t AddressAndType = Packet[NewIdx].Packet.getAddressAndType();     // get ID of this packet: ID is address-type and address (2+24 = 26 bits)
      for(uint8_t Idx=0; Idx<Size; Idx++)                                      // look for other packets with same ID
      { if(Idx==NewIdx) continue;                                              // avoid the new packet
        if(Packet[Idx].Packet.getAddressAndType() == AddressAndType)           // if another packet with same ID:
-       { Prev=Packet+Idx; clean(Idx); }                                                        // then remove it: set rank to zero
+       { Prev=Packet+Idx; clean(Idx); }                                       // then remove it: set rank to zero
      }
      uint8_t Rank=Packet[NewIdx].Rank; Sum+=Rank;                             // add the new packet to the rank sum
      if(NewIdx==LowIdx) reCalc();
@@ -612,14 +620,16 @@ template<class OGNx_Packet, uint8_t Size=8>
      uint16_t RankIdx = Rand%Sum;
      uint8_t Idx; uint16_t RankSum=0;
      for(Idx=0; Idx<Size; Idx++)
-     { uint8_t Rank=Packet[Idx].Rank; if(Rank==0) continue;
+     { if(Packet[Idx].Alloc==0) continue;
+       uint8_t Rank=Packet[Idx].Rank; if(Rank==0) continue;
        RankSum+=Rank; if(RankSum>RankIdx) return Idx; }
      return Rand%Size; }
 
    void reCalc(void)                                                           // find the lowest rank and calc. the sum of all ranks
    { Sum=Low=Packet[0].Rank; LowIdx=0;                                         // take minimum at the first slot
      for(uint8_t Idx=1; Idx<Size; Idx++)                                       // loop over all other slots
-     { uint8_t Rank=Packet[Idx].Rank;
+     { if(Packet[Idx].Alloc==0) { Low=0; LowIdx=Idx; continue; }
+       uint8_t Rank=Packet[Idx].Rank;
        Sum+=Rank;                                                              // sum up the ranks
        if(Rank<Low) { Low=Rank; LowIdx=Idx; }                                  // update the minimum
      }
@@ -627,14 +637,14 @@ template<class OGNx_Packet, uint8_t Size=8>
 
    void cleanTime(uint8_t Time)                                                // clean up slots of given Time
    { for(int Idx=0; Idx<Size; Idx++)
-     { if(Packet[Idx].Rank==0) continue;
+     { if(Packet[Idx].Alloc==0) continue;
        uint8_t PktTime=Packet[Idx].Packet.Position.Time;
        if( PktTime==Time || PktTime>=60) clean(Idx);
      }
    }
 
-   void clean(uint8_t Idx)                                                      // clean given slot
-   { Sum-=Packet[Idx].Rank; Packet[Idx].Rank=0; Low=0; LowIdx=Idx; }
+   void clean(uint8_t Idx)                                                      // clean given slot, remove it from the sum
+   { Sum-=Packet[Idx].Rank; Packet[Idx].Rank=0; Packet[Idx].Alloc=0; Low=0; LowIdx=Idx; }
 
    void decrRank(uint8_t Idx, uint8_t Decr=1)                                   // decrement rank of given slot
    { uint8_t Rank=Packet[Idx].Rank; if(Rank==0) return;                         // if zero already: do nothing
@@ -646,12 +656,13 @@ template<class OGNx_Packet, uint8_t Size=8>
    uint8_t Print(char *Out)
    { uint8_t Len=0;
      for(uint8_t Idx=0; Idx<Size; Idx++)                                        // loop through the slots
-     { uint8_t Rank=Packet[Idx].Rank;
+     { if(Packet[Idx].Alloc==0) continue;
+       uint8_t Rank=Packet[Idx].Rank;
        Out[Len++]=' '; Len+=Format_Hex(Out+Len, Rank);                          // print the slot Rank
-       if(Rank)                                                                 // if Rank is none-zero
+       // if(Rank)                                                                 // if Rank is none-zero
        { Out[Len++]='/'; Len+=Format_Hex(Out+Len, Packet[Idx].Packet.getAddressAndType() );   // print address-type and address
          Out[Len++]=':';
-         if(Packet[Idx].Header.Encrypted) Len+=Format_String(Out+Len, "ee");
+         if(Packet[Idx].Packet.Header.Encrypted) Len+=Format_String(Out+Len, "ee");
          else Len+=Format_UnsDec(Out+Len, Packet[Idx].Packet.Position.Time, 2); // [sec] print time
        }
      }
@@ -827,7 +838,7 @@ class GPS_Time
             if(Len==1) mSec = Frac*100;
        else if(Len==2) mSec = Frac*10;
        else if(Len==3) mSec = Frac;
-       else if(Len==4) mSec = Frac/10; 
+       else if(Len==4) mSec = Frac/10;
        else return -1; }
      if(mPrev!=mSec) Same=0;                                  // return 0 when time is valid but did not change
      return Same; }                                           // return 1 when time did not change (both RMC and GGA were for same time)
@@ -885,19 +896,25 @@ class GPS_Position: public GPS_Time
 { public:
 
   union
-  { uint16_t Flags;             // bit #0 = GGA and RMC had same Time
+  { uint32_t Flags;             // bit #0 = GGA and RMC had same Time
     struct
     { bool hasGPS   :1;         // all required GPS information has been supplied (but this is not the GPS lock status)
-      bool hasBaro  :1;         // pressure sensor information: pressure, standard pressure altitude, temperature, humidity
-      // bool hasHum   :1;         //
       bool hasTime  :1;         // Time has been supplied
-      bool hasDate  :1;         // Time has been supplied
+      bool hasDate  :1;         // Date has been supplied
       bool hasRMC   :1;         // GxRMC has been supplied
       bool hasGGA   :1;         // GxGGA has been supplied
       bool hasGSA   :1;         // GxGSA has been supplied
-      // bool hasGSV   :1;
+      bool hasGSV   :1;
       bool isReady  :1;         // is ready for the following treaement
       bool Sent     :1;         // has been transmitted
+      bool hasBaro  :1;         // pressure sensor information: pressure, standard pressure altitude, temperature
+      bool hasHum   :1;         // has humidity (not all baro have humiditiy)
+      bool hasClimb :1;         // has climb-rate computed or measured
+      bool hasTurn  :1;         //
+      bool hasAccel :1;         //
+      bool hasIAS   :1;         // has Indicated Air Speed calculated/measured
+      bool hasAHRS  :1;         // has Attitude Heading Reference System data
+      bool InFlight :1;         // take-off and landing detection
     } ;
   } ;
 
@@ -915,6 +932,10 @@ class GPS_Position: public GPS_Time
    int16_t Speed;               // [0.1 m/s] speed-over-ground
    int16_t Heading;             // [0.1 deg]  heading-over-ground
 
+   uint16_t AirSpeed;           // [0.1m/s] Indicated Air Speed
+    int16_t Pitch;              // [] AHRS Attitude
+    int16_t Roll;               // [] AHRS Inclination
+
    int16_t ClimbRate;           // [0.1 meter/sec)
    int16_t TurnRate;            // [0.1 deg/sec]
 
@@ -929,8 +950,12 @@ class GPS_Position: public GPS_Time
    int32_t StdAltitude;         // [0.1 meter] standard pressure altitude (from the pressure sensor and atmosphere calculator)
    int16_t Temperature;         // [0.1 degC]
    int16_t Humidity;            // [0.1%]      relative humidity
-   int16_t Accel;               // [0.1m/s^2]  acceleration along the track
+   int16_t LongAccel;           // [0.1m/s^2]  acceleration along the track
    uint16_t Seq;                // sequencial number to track GPS positions in a pipe
+
+   // uint16_t LockTime;           // [sec] Time since lock
+   uint8_t NMEAframes;          // count the correct NMEA frames
+   uint8_t NMEAerrors;          // cound the NMEA check-sum errors;
 
   public:
 
@@ -944,7 +969,8 @@ class GPS_Position: public GPS_Time
      Latitude=0; Longitude=0; LatitudeCosine=3000;
      Altitude=0; GeoidSeparation=0;
      Speed=0; Heading=0; ClimbRate=0; TurnRate=0;
-     Temperature=0; Pressure=0; StdAltitude=0; Humidity=0; }
+     Temperature=0; Pressure=0; StdAltitude=0; Humidity=0;
+     NMEAframes=0; NMEAerrors=0; }
 
    bool isValid(void) const                          // is GPS data is valid = GPS lock
    { if(!isTimeValid()) return 0;                    // is GPS time valid/present ?
@@ -980,13 +1006,13 @@ class GPS_Position: public GPS_Time
    int PrintTime(char *Out)     const { return sprintf(Out, "%02d:%02d:%02d.%03d", Hour, Min, Sec, mSec ); }
 
    void Print(void) const
-   { printf("Time/Date = "); PrintDateTime(); printf(" "); // printf(" = %10ld.%03dsec\n", (long int)UnixTime, mSec);
-     printf("FixQuality/Mode=%d/%d: %d satellites DOP/H/V=%3.1f/%3.1f/%3.1f ", FixQuality, FixMode, Satellites, 0.1*PDOP, 0.1*HDOP, 0.1*VDOP);
-     printf("FixQuality=%d: %d satellites HDOP=%3.1f ", FixQuality, Satellites, 0.1*HDOP);
-     printf("Lat/Lon/Alt = [%+10.6f,%+10.6f]deg %+3.1f(%+3.1f)m LatCosine=%+6.3f ", 0.0001/60*Latitude, 0.0001/60*Longitude, 0.1*Altitude, 0.1*GeoidSeparation, 1.0/(1<<12)*LatitudeCosine);
-     printf("Speed/Heading = %3.1fm/s %05.1fdeg ", 0.1*Speed, 0.1*Heading);
-     printf("Climb = %+5.1fm/s Turn = %+5.1fdeg/sec\n", 0.1*ClimbRate, 0.1*TurnRate);
-   }
+   { printf("Time/Date: "); PrintDateTime();
+     printf(" FixQual/Mode=%d/%d: %d sats DOP/H/V=%3.1f/%3.1f/%3.1f", FixQuality, FixMode, Satellites, 0.1*PDOP, 0.1*HDOP, 0.1*VDOP);
+     printf(" Lat/Lon/Alt = [%+10.6f,%+10.6f]deg %+3.1f(%+3.1f)m LatCos=%+6.3f", 0.0001/60*Latitude, 0.0001/60*Longitude, 0.1*Altitude, 0.1*GeoidSeparation, 1.0/(1<<12)*LatitudeCosine);
+     printf(" Speed/Heading = %3.1fm/s %05.1fdeg", 0.1*Speed, 0.1*Heading);
+     printf(" Climb = %+5.1fm/s", 0.1*ClimbRate);
+     printf(" Turn = %+5.1fdeg/s", 0.1*TurnRate);
+     printf(" %d(%d)\n", NMEAframes, NMEAerrors); }
 
    int Print(char *Out) const
    { int Len=0;
@@ -1001,16 +1027,17 @@ class GPS_Position: public GPS_Time
      printf(" %d/%d/%02d/%4.1f/%4.1f/%4.1f", FixQuality, FixMode, Satellites, 0.1*PDOP, 0.1*HDOP, 0.1*VDOP);
      printf(" [%+10.6f,%+10.6f]deg %+3.1f(%+3.1f)m", 0.0001/60*Latitude, 0.0001/60*Longitude, 0.1*Altitude, 0.1*GeoidSeparation);
      printf(" %4.1fm/s %05.1fdeg", 0.1*Speed, 0.1*Heading);
-     printf("\n"); }
+     printf(" %d(%d)\n", NMEAframes, NMEAerrors); }
 
    int PrintLine(char *Out) const
    { int Len=0; // PrintDateTime(Out);
      Out[Len++]=hasTime?'T':'_';
      Out[Len++]=hasGPS ?'G':'_';
      Out[Len++]=hasBaro?'B':'_';
+     Out[Len++]=hasHum ?'H':'_';
      Out[Len++]=hasRMC ?'R':'_';
      Out[Len++]=hasGGA ?'G':'_';
-     Out[Len++]=hasGSA ?'G':'_';
+     Out[Len++]=hasGSA ?'S':'_';
      Out[Len++]=isValid() ?'V':'_';
      Out[Len++]=isTimeValid() ?'T':'_';
      Out[Len++]=isDateValid() ?'D':'_';
@@ -1205,8 +1232,7 @@ class GPS_Position: public GPS_Time
    int ReadRMC(NMEA_RxMsg &RxMsg)
    { if(RxMsg.Parms<11) return -2;                                                        // no less than 12 parameters
      hasGPS = ReadTime((const char *)RxMsg.ParmPtr(0))>0;                                 // read time and check if same as the GGA says
-     // hasDate = ReadDate((const char *)RxMsg.ParmPtr(8))>0;                                // date
-     if(ReadDate((const char *)RxMsg.ParmPtr(8))<0) setDefaultDate();
+     if(ReadDate((const char *)RxMsg.ParmPtr(8))<0) setDefaultDate();                     // date
      ReadLatitude(*RxMsg.ParmPtr(3), (const char *)RxMsg.ParmPtr(2));                     // Latitude
      ReadLongitude(*RxMsg.ParmPtr(5), (const char *)RxMsg.ParmPtr(4));                    // Longitude
      ReadSpeed((const char *)RxMsg.ParmPtr(6));                                           // Speed
@@ -1233,7 +1259,9 @@ class GPS_Position: public GPS_Time
      return TimeDiff; }                                                                     // [0.01s]
 */
    int16_t calcDifferentials(GPS_Position &RefPos, bool useBaro=1) // calculate climb rate and turn rate with an earlier reference position
-   { ClimbRate=0; TurnRate=0;
+   { // ClimbRate=0; hasClimb=0;
+     // TurnRate=0;  hasTurn=0;
+     // LongAccel=0; hasAccel=0;
      if(RefPos.FixQuality==0) return 0;            // give up if no fix on the reference position
      int16_t TimeDiff = calcTimeDiff(RefPos);      // [ms] time difference between positions
      if(TimeDiff<10) return 0;                     // [ms] give up if smaller than 10ms (as well when negative)
@@ -1242,30 +1270,37 @@ class GPS_Position: public GPS_Time
      ClimbRate = Altitude-RefPos.Altitude;         // [0.1m/s] climb rate as altitude difference
      if(useBaro && hasBaro && RefPos.hasBaro && (abs(Altitude-StdAltitude)<2500) ) // if there is baro data then
      { ClimbRate += StdAltitude-RefPos.StdAltitude; // [0.1m/s] on pressure altitude
-       ClimbRate = (ClimbRate+1)>>1; }
-     Accel = Speed-RefPos.Speed;                   // longitual acceleration
+       ClimbRate = (ClimbRate+1)>>1; }             // take average of the GPS and baro climb rate
+     LongAccel = Speed-RefPos.Speed;               // longitual acceleration
      if(TimeDiff==100)                             // [ms] if 0.1sec difference
-     { ClimbRate*=10;
-       TurnRate *=10;
-       Accel    *=10; }
+     { ClimbRate *=10;
+       TurnRate  *=10;
+       LongAccel *=10; }
      if(TimeDiff==200)                             // [ms] if 0.2sec difference
-     { ClimbRate*=5;
-       TurnRate *=5;
-       Accel    *=5; }
+     { ClimbRate *=5;
+       TurnRate  *=5;
+       LongAccel *=5; }
+     if(TimeDiff==250)                             // [ms] if 0.25sec difference
+     { ClimbRate *=4;
+       TurnRate  *=4;
+       LongAccel *=4; }
      else if(TimeDiff==500)
-     { ClimbRate*=2;
-       TurnRate *=2;
-       Accel    *=2; }
+     { ClimbRate *=2;
+       TurnRate  *=2;
+       LongAccel *=2; }
      else if(TimeDiff==1000)
      { }
      else if(TimeDiff==2000)
-     { ClimbRate=(ClimbRate+1)>>1;
-        TurnRate=( TurnRate+1)>>1;
-        Accel   =( Accel   +1)>>1; }
+     { ClimbRate = (ClimbRate+1)>>1;
+       TurnRate  = ( TurnRate+1)>>1;
+       LongAccel = (LongAccel+1)>>1; }
      else if(TimeDiff!=0)
      { ClimbRate = ((int32_t)ClimbRate*1000)/TimeDiff;
-        TurnRate = ((int32_t) TurnRate*1000)/TimeDiff;
-        Accel    = ((int32_t) Accel   *1000)/TimeDiff; }
+       TurnRate  = ((int32_t) TurnRate*1000)/TimeDiff;
+       LongAccel = ((int32_t)LongAccel*1000)/TimeDiff; }
+     // printf("calcDifferences( , %d) %02d.%03ds hasBaro:%d:%d %4dms %3.1f/%3.1f m %+4.1f m/s\n",
+     //         useBaro, Sec, mSec, hasBaro, RefPos.hasBaro, TimeDiff, 0.1*Altitude, 0.1*StdAltitude, 0.1*ClimbRate);
+     hasClimb=1; hasTurn=1; hasAccel=1;
      return TimeDiff; } // [ms]
 
    void Write(MAV_GPS_RAW_INT *MAV) const
@@ -1330,7 +1365,7 @@ class GPS_Position: public GPS_Time
      if(hasBaro) { Packet.setQNE((StdAltitude+5)/10); }
    }
 
-   void Encode(GDL90_REPORT &Report)
+   void Encode(GDL90_REPORT &Report) const
    { Report.setAccuracy(9, 9);
      int32_t Lat = getCordicLatitude();                                     // Latitude:  [0.0001/60deg] => [cordic]
      int32_t Lon = getCordicLongitude();                                    // Longitude: [0.0001/60deg] => [cordic]
@@ -1348,8 +1383,25 @@ class GPS_Position: public GPS_Time
      Report.setClimbRate(6*MetersToFeet(ClimbRate));
    }
 
-  template <class OGNx_Packet>
-   void Encode(OGNx_Packet &Packet) const
+  void Encode(ADSL_Packet &Packet) const
+  { Packet.setAlt((Altitude+GeoidSeparation+5)/10);
+    Packet.setLat(Packet.OGNtoFNT(Latitude));
+    Packet.setLon(Packet.OGNtoFNT(Longitude));
+    Packet.TimeStamp = (Sec*4+mSec/250)&0x3F;
+    Packet.setSpeed(((uint32_t)Speed*4+5)/10);
+    Packet.setClimb(((int32_t)ClimbRate*8+5)/10);
+    // if(hasClimb) Packet.setClimb(((int32_t)ClimbRate*8+5)/10);
+    //        else  Packet.clrClimb();
+    Packet.setTrack(((uint32_t)Heading*32+112)/225);
+    Packet.Integrity[0]=0; Packet.Integrity[1]=0;
+    if((FixQuality>0)&&(FixMode>=2))
+    { Packet.setHorPrec((HDOP*2+5)/10);
+      Packet.setVerPrec((VDOP*3+5)/10); }
+  }
+
+  // template <class OGNx_Packet>
+  //  void Encode(OGNx_Packet &Packet) const
+   void Encode(OGN1_Packet &Packet) const
    { Packet.Position.FixQuality = FixQuality<3 ? FixQuality:3;             //
      if((FixQuality>0)&&(FixMode>=2)) Packet.Position.FixMode = FixMode-2; //
                                  else Packet.Position.FixMode = 0;
@@ -1399,9 +1451,11 @@ class GPS_Position: public GPS_Time
      if(hasBaro)
      { Packet.EncodeTemperature(Temperature);
        Packet.Status.Pressure = (Pressure+16)>>5;
-       Packet.EncodeHumidity(Humidity); }
+       if(hasHum) Packet.EncodeHumidity(Humidity);
+             else Packet.clrHumidity(); }
      else
-     { Packet.Status.Pressure = 0;
+     { Packet.Status.Pressure=0;
+       Packet.clrTemperature();
        Packet.clrHumidity(); }
    }
 
@@ -1458,7 +1512,7 @@ class GPS_Position: public GPS_Time
    }
 
    void Extrapolate(int32_t dTime)                                            // [ms] extrapolate the position by dTime
-   { int16_t dSpeed = ((int32_t)Accel*dTime)/1000;
+   { int16_t dSpeed = ((int32_t)LongAccel*dTime)/1000;
      Speed += dSpeed/2;
      int16_t HeadAngle = ((int32_t)Heading<<12)/225;                          // [cordic] heading angle
      int16_t TurnAngle = (((dTime*TurnRate)/250)<<9)/225;                     // [cordic]
@@ -1529,7 +1583,9 @@ class GPS_Position: public GPS_Time
    // { return IntSine((uint16_t)(LatAngle+0x4000)); }
 
    static int16_t calcLatCosine(int16_t LatAngle)
-   { return Icos(LatAngle); }
+   { int16_t LatCos=Icos(LatAngle);
+     if(LatCos<=0) LatCos=1;                                                 // protect against zero as it is used for division
+     return LatCos; }
 
    // int32_t getLatDistance(int32_t RefLatitude) const                      // [m] distance along latitude
    // { return calcLatDistance(RefLatitude, Latitude); }
